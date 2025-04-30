@@ -28,34 +28,78 @@ class SwinModel:
         self.model.eval()
         
         # 이미지 전처리기 초기화
-        self.processor = AutoImageProcessor.from_pretrained("microsoft/swin-tiny-patch4-window7-224")
+        self.processor = AutoImageProcessor.from_pretrained("microsoft/swin-base-patch4-window7-224")
 
     def predict(self, image):
-        # 이미지 전처리
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-        
-        image = transform(image).unsqueeze(0)
-        
-        # 모델 예측
-        self.model.eval()
-        with torch.no_grad():
-            outputs = self.model(pixel_values=image)
-            logits = outputs.logits
-            probabilities = torch.nn.functional.softmax(logits, dim=1)
-            predicted_class = torch.argmax(probabilities, dim=1).item()
-            confidence = probabilities[0][predicted_class].item() * 100
+        try:
+            # 이미지 전처리
+            transform = transforms.Compose([
+                transforms.Resize((224, 224)),  # 모든 이미지를 224x224로 리사이즈
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
             
-            # 디버깅 출력 추가
-            print(f"모델 출력 로짓: {logits}")
-            print(f"소프트맥스 확률: {probabilities}")
-            print(f"예측된 클래스: {predicted_class}")
-            print(f"신뢰도: {confidence:.2f}%")
-        
-        return predicted_class, confidence
+            # 이미지가 이미 PIL.Image 객체인 경우
+            if isinstance(image, Image.Image):
+                print("PIL.Image 객체 처리 중...")
+                # 이미지가 RGB가 아닌 경우 변환
+                if image.mode != 'RGB':
+                    print(f"이미지 모드 변환: {image.mode} -> RGB")
+                    image = image.convert('RGB')
+                with torch.no_grad():
+                    image = transform(image).unsqueeze(0)
+            
+            # 이미지가 파일 경로인 경우
+            elif isinstance(image, str):
+                print(f"파일 경로 처리 중: {image}")
+                with Image.open(image) as img:
+                    image = img.convert('RGB')
+                    with torch.no_grad():
+                        image = transform(image).unsqueeze(0)
+            
+            # 이미지가 torch.Tensor인 경우
+            elif isinstance(image, torch.Tensor):
+                print("torch.Tensor 처리 중...")
+                with torch.no_grad():
+                    if image.dim() == 3:  # [C, H, W]
+                        image = image.unsqueeze(0)  # [1, C, H, W]
+                    if image.shape[2:] != (224, 224):  # 크기가 224x224가 아닌 경우
+                        image = transforms.functional.resize(image, (224, 224))
+            
+            else:
+                raise ValueError(f"지원하지 않는 이미지 타입: {type(image)}")
+            
+            # 모델 예측
+            self.model.eval()
+            device = next(self.model.parameters()).device
+            image = image.to(device)
+            
+            with torch.no_grad():
+                outputs = self.model(pixel_values=image)
+                logits = outputs.logits
+                probabilities = torch.nn.functional.softmax(logits, dim=1)
+                predicted_class = torch.argmax(probabilities, dim=1).item()
+                confidence = probabilities[0][predicted_class].item() * 100
+                
+                # 디버깅 출력 추가
+                print(f"모델 출력 로짓: {logits}")
+                print(f"소프트맥스 확률: {probabilities}")
+                print(f"예측된 클래스: {predicted_class}")
+                print(f"신뢰도: {confidence:.2f}%")
+            
+            return predicted_class, confidence
+            
+        except FileNotFoundError as e:
+            print(f"파일을 찾을 수 없습니다: {str(e)}")
+            raise ValueError(f"파일을 찾을 수 없습니다: {str(e)}")
+        except Image.UnidentifiedImageError as e:
+            print(f"이미지 파일을 인식할 수 없습니다: {str(e)}")
+            raise ValueError(f"이미지 파일을 인식할 수 없습니다: {str(e)}")
+        except Exception as e:
+            print(f"이미지 처리 중 오류 발생: {str(e)}")
+            print(f"오류 타입: {type(e)}")
+            print(f"오류 상세: {str(e)}")
+            raise
 
 def load_model(model_path):
     try:
